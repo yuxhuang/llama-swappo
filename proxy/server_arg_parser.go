@@ -19,6 +19,7 @@ type ServerArgs struct {
 	QuantizationLevel string
 	CmdAlias          string
 	CmdModelPath      string // Base name of the model file from --model arg
+	FullModelPath     string // Full path to the model file from --model arg
 }
 
 // ServerArgParser defines an interface for parsing server command line arguments.
@@ -165,6 +166,7 @@ func (p *LlamaServerParser) Parse(cmdStr string, modelID string) ServerArgs {
 			}
 		case "-m", "--model":
 			if i+1 < len(args) {
+				parsed.FullModelPath = args[i+1]
 				parsed.CmdModelPath = filepath.Base(args[i+1])
 				i++
 			}
@@ -178,6 +180,20 @@ func (p *LlamaServerParser) Parse(cmdStr string, modelID string) ServerArgs {
 			}
 			if !foundTools {
 				parsed.Capabilities = append(parsed.Capabilities, "tools")
+			}
+		case "--mmproj":
+			foundVision := false
+			for _, cap := range parsed.Capabilities {
+				if cap == "vision" {
+					foundVision = true
+					break
+				}
+			}
+			if !foundVision {
+				parsed.Capabilities = append(parsed.Capabilities, "vision")
+			}
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
 			}
 		}
 	}

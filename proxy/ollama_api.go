@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gpustack/gguf-parser-go"
+	"github.com/mostlygeek/llama-swap/proxy/config"
 )
 
 // normalizeKeepAlive converts keep_alive from interface{} to string format
@@ -64,6 +67,251 @@ func (pm *ProxyManager) ollamaVersionHandler() gin.HandlerFunc {
 	}
 }
 
+func (pm *ProxyManager) getModelModifiedTime(modelCfg config.ModelConfig, modelID string) time.Time {
+	parser := NewLlamaServerParser()
+	parsedArgs := parser.Parse(modelCfg.Cmd, modelID)
+
+	if parsedArgs.FullModelPath != "" {
+		if info, err := os.Stat(parsedArgs.FullModelPath); err == nil {
+			return info.ModTime().UTC()
+		}
+	}
+
+	return pm.startTime
+}
+
+func (pm *ProxyManager) getModelDetails(modelCfg config.ModelConfig, modelID string) (OllamaModelDetails, []string) {
+	// 1. Check if we have manually provided metadata for details
+	details := OllamaModelDetails{Format: "gguf"}
+	if family, ok := modelCfg.Metadata["family"].(string); ok && family != "" {
+		details.Family = family
+	}
+	if paramSize, ok := modelCfg.Metadata["parameterSize"].(string); ok && paramSize != "" {
+		details.ParameterSize = paramSize
+	}
+	if quantLevel, ok := modelCfg.Metadata["quantizationLevel"].(string); ok && quantLevel != "" {
+		details.QuantizationLevel = quantLevel
+	}
+
+	// Manual override for capabilities
+	var manualCaps []string
+	if v, ok := modelCfg.Metadata["capabilities"].([]any); ok {
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				manualCaps = append(manualCaps, s)
+			}
+		}
+	}
+
+	// 2. Check Cache
+	pm.cacheMutex.RLock()
+	cached, found := pm.modelInfoCache[modelID]
+	pm.cacheMutex.RUnlock()
+
+	if found {
+		// Merge cached info with manually provided metadata
+		if details.Family == "" {
+			details.Family = cached.Details.Family
+		}
+		if details.ParameterSize == "" {
+			details.ParameterSize = cached.Details.ParameterSize
+		}
+		if details.QuantizationLevel == "" {
+			details.QuantizationLevel = cached.Details.QuantizationLevel
+		}
+		if details.Family != "" && details.Family != "unknown" {
+			details.Families = []string{details.Family}
+		}
+
+		caps := cached.Capabilities
+		if len(manualCaps) > 0 {
+			caps = manualCaps
+		}
+		return details, caps
+	}
+
+	// 3. Inference from CLI and File
+	parser := NewLlamaServerParser()
+	parsedArgs := parser.Parse(modelCfg.Cmd, modelID)
+
+	caps := []string{"completion", "tools"}
+	// Add capabilities from CLI flags (detected by parser)
+	for _, c := range parsedArgs.Capabilities {
+		found := false
+		for _, existing := range caps {
+			if existing == c {
+				found = true
+				break
+			}
+		}
+		if !found {
+			caps = append(caps, c)
+		}
+	}
+
+	extractedDetails := OllamaModelDetails{Format: "gguf"}
+
+	if parsedArgs.FullModelPath != "" {
+		// Use robust GGUF parser library
+		if gf, err := gguf_parser.ParseGGUFFile(parsedArgs.FullModelPath); err == nil {
+			gm := gf.Metadata()
+
+			// Architecture
+			extractedDetails.Family = gm.Architecture
+
+			// Parameter Count
+			if pCount := gm.Parameters; pCount > 0 {
+				extractedDetails.ParameterSize = pCount.String()
+			}
+
+			// Quantization Level
+			extractedDetails.QuantizationLevel = strings.TrimPrefix(gm.FileType.String(), "MOSTLY_")
+
+			// Vision check
+			if gm.Architecture == "llava" || gm.Architecture == "clip" {
+				foundVision := false
+				for _, c := range caps {
+					if c == "vision" {
+						foundVision = true
+						break
+					}
+				}
+				if !foundVision {
+					caps = append(caps, "vision")
+				}
+			}
+
+			// Tool check via chat template
+			if kv, ok := gf.Header.MetadataKV.Get("tokenizer.chat_template"); ok {
+				if template := kv.ValueString(); strings.Contains(template, "tool_calls") || strings.Contains(template, "available_tools") {
+					foundTools := false
+					for _, c := range caps {
+						if c == "tools" {
+							foundTools = true
+							break
+						}
+					}
+					if !foundTools {
+						caps = append(caps, "tools")
+					}
+				}
+			}
+		}
+	}
+
+	// Fallback to inference for missing fields in extractedDetails
+	if extractedDetails.Family == "" {
+		arch := inferPattern(modelID, architecturePatterns, orderedArchKeys)
+		extractedDetails.Family = inferFamilyFromName(modelID, arch)
+	}
+	if extractedDetails.ParameterSize == "" {
+		extractedDetails.ParameterSize = inferParameterSizeFromName(modelID)
+	}
+	if extractedDetails.QuantizationLevel == "" {
+		extractedDetails.QuantizationLevel = inferQuantizationLevelFromName(modelID)
+	}
+
+	// Update cache
+	pm.cacheMutex.Lock()
+	pm.modelInfoCache[modelID] = struct {
+		Details      OllamaModelDetails
+		Capabilities []string
+	}{Details: extractedDetails, Capabilities: caps}
+	pm.cacheMutex.Unlock()
+
+	// Merge result
+	if details.Family == "" {
+		details.Family = extractedDetails.Family
+	}
+	if details.ParameterSize == "" {
+		details.ParameterSize = extractedDetails.ParameterSize
+	}
+	if details.QuantizationLevel == "" {
+		details.QuantizationLevel = extractedDetails.QuantizationLevel
+	}
+	if details.Family != "" && details.Family != "unknown" {
+		details.Families = []string{details.Family}
+	}
+
+	if len(manualCaps) > 0 {
+		caps = manualCaps
+	}
+
+	return details, caps
+}
+
+func formatParameterCount(count uint64) string {
+	if count == 0 {
+		return "unknown"
+	}
+	billions := float64(count) / 1e9
+	if billions >= 1.0 {
+		return fmt.Sprintf("%.1fB", billions)
+	}
+	millions := float64(count) / 1e6
+	return fmt.Sprintf("%.1fM", millions)
+}
+
+func formatFileType(fType uint32) string {
+	// Reference: llama.cpp/ggml-common.h llama_ftype
+	switch fType {
+	case 0:
+		return "F32"
+	case 1:
+		return "F16"
+	case 2:
+		return "Q4_0"
+	case 3:
+		return "Q4_1"
+	case 6:
+		return "Q5_0"
+	case 7:
+		return "Q5_1"
+	case 8:
+		return "Q8_0"
+	case 9:
+		return "Q2_K"
+	case 10:
+		return "Q3_K_S"
+	case 11:
+		return "Q3_K_M"
+	case 12:
+		return "Q3_K_L"
+	case 13:
+		return "Q4_K_S"
+	case 14:
+		return "Q4_K_M"
+	case 15:
+		return "Q5_K_S"
+	case 16:
+		return "Q5_K_M"
+	case 17:
+		return "Q6_K"
+	case 18:
+		return "IQ2_XXS"
+	case 19:
+		return "IQ2_XS"
+	case 20:
+		return "IQ3_XXS"
+	case 21:
+		return "IQ1_S"
+	case 22:
+		return "IQ4_NL"
+	case 23:
+		return "IQ3_S"
+	case 24:
+		return "IQ2_S"
+	case 25:
+		return "IQ4_XS"
+	case 26:
+		return "IQ1_M"
+	case 27:
+		return "BF16"
+	default:
+		return "unknown"
+	}
+}
+
 func (pm *ProxyManager) ollamaHeartbeatHandler(c *gin.Context) {
 	c.String(http.StatusOK, "Ollama is running") // Ollama server returns this string
 }
@@ -71,50 +319,31 @@ func (pm *ProxyManager) ollamaHeartbeatHandler(c *gin.Context) {
 func (pm *ProxyManager) ollamaListTagsHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		models := []OllamaModelResponse{}
-		now := time.Now().UTC() // Use a consistent timestamp
 
 		pm.RLock() // Lock for reading pm.config.Models
 		for id, modelCfg := range pm.config.Models {
 			if modelCfg.Unlisted {
 				continue
 			}
-			details := OllamaModelDetails{Format: "gguf"}
-			if family, ok := modelCfg.Metadata["family"].(string); ok && family != "" {
-				details.Family = family
-			} else {
-				// Basic inference for list view
-				arch := "unknown"
-				if v, ok := modelCfg.Metadata["architecture"].(string); ok && v != "" {
-					arch = v
-				} else {
-					arch = inferPattern(id, architecturePatterns, orderedArchKeys)
-				}
-				details.Family = inferFamilyFromName(id, arch)
-			}
-			if paramSize, ok := modelCfg.Metadata["parameterSize"].(string); ok && paramSize != "" {
-				details.ParameterSize = paramSize
-			} else {
-				details.ParameterSize = inferParameterSizeFromName(id)
-			}
-			if quantLevel, ok := modelCfg.Metadata["quantizationLevel"].(string); ok && quantLevel != "" {
-				details.QuantizationLevel = quantLevel
-			} else {
-				details.QuantizationLevel = inferQuantizationLevelFromName(id)
-			}
-			if details.Family != "unknown" && details.Family != "" {
-				details.Families = []string{details.Family}
-			}
+
+			details, caps := pm.getModelDetails(modelCfg, id)
 
 			models = append(models, OllamaModelResponse{
-				Name:       id,
-				Model:      id,
-				ModifiedAt: now,
-				Size:       0,
-				Digest:     fmt.Sprintf("%x", id),
-				Details:    details,
+				Name:         id,
+				Model:        id,
+				ModifiedAt:   pm.getModelModifiedTime(modelCfg, id),
+				Size:         0,
+				Digest:       fmt.Sprintf("%x", id),
+				Details:      details,
+				Capabilities: caps,
 			})
 		}
 		pm.RUnlock()
+
+		// Sort models by name
+		sort.Slice(models, func(i, j int) bool {
+			return models[i].Name < models[j].Name
+		})
 
 		// Handle CORS if Origin header is present
 		if origin := c.Request.Header.Get("Origin"); origin != "" {
@@ -155,52 +384,17 @@ func (pm *ProxyManager) ollamaShowHandler() gin.HandlerFunc {
 		parser := NewLlamaServerParser()
 		parsedArgs := parser.Parse(modelCfg.Cmd, id)
 
-		arch := parsedArgs.Architecture
-		family := parsedArgs.Family
-		paramSize := parsedArgs.ParameterSize
-		quantLevel := parsedArgs.QuantizationLevel
-		ctxLength := parsedArgs.ContextLength
-		caps := parsedArgs.Capabilities
-		if len(caps) == 0 {
-			caps = []string{"completion"}
+		details, caps := pm.getModelDetails(modelCfg, id)
+
+		arch := details.Family
+		if arch == "" {
+			arch = parsedArgs.Architecture
 		}
+		ctxLength := parsedArgs.ContextLength
 
 		// Override with metadata if present
-		if v, ok := modelCfg.Metadata["architecture"].(string); ok && v != "" {
-			arch = v
-		}
-		if v, ok := modelCfg.Metadata["family"].(string); ok && v != "" {
-			family = v
-		}
-		if v, ok := modelCfg.Metadata["parameterSize"].(string); ok && v != "" {
-			paramSize = v
-		}
-		if v, ok := modelCfg.Metadata["quantizationLevel"].(string); ok && v != "" {
-			quantLevel = v
-		}
 		if v, ok := modelCfg.Metadata["contextLength"].(int); ok && v != 0 {
 			ctxLength = v
-		}
-		if v, ok := modelCfg.Metadata["capabilities"].([]any); ok && len(v) > 0 {
-			newCaps := make([]string, 0, len(v))
-			for _, item := range v {
-				if s, isString := item.(string); isString {
-					newCaps = append(newCaps, s)
-				}
-			}
-			if len(newCaps) > 0 {
-				caps = newCaps
-			}
-		}
-
-		details := OllamaModelDetails{
-			Format:            "gguf",
-			Family:            family,
-			ParameterSize:     paramSize,
-			QuantizationLevel: quantLevel,
-		}
-		if family != "unknown" && family != "" {
-			details.Families = []string{family}
 		}
 
 		modelInfo := map[string]interface{}{
@@ -216,6 +410,7 @@ func (pm *ProxyManager) ollamaShowHandler() gin.HandlerFunc {
 			Details:      details,
 			ModelInfo:    modelInfo,
 			Capabilities: caps,
+			ModifiedAt:   pm.getModelModifiedTime(modelCfg, id),
 		}
 
 		// Handle CORS if Origin header is present
@@ -248,48 +443,28 @@ func (pm *ProxyManager) ollamaPSHandler() gin.HandlerFunc {
 					}
 
 					modelCfg := process.config
-					details := OllamaModelDetails{Format: "gguf"}
-
-					arch := "unknown"
-					if v, ok := modelCfg.Metadata["architecture"].(string); ok && v != "" {
-						arch = v
-					} else {
-						arch = inferPattern(modelID, architecturePatterns, orderedArchKeys)
-					}
-
-					if v, ok := modelCfg.Metadata["family"].(string); ok && v != "" {
-						details.Family = v
-					} else {
-						details.Family = inferFamilyFromName(modelID, arch)
-					}
-					if v, ok := modelCfg.Metadata["parameterSize"].(string); ok && v != "" {
-						details.ParameterSize = v
-					} else {
-						details.ParameterSize = inferParameterSizeFromName(modelID)
-					}
-					if v, ok := modelCfg.Metadata["quantizationLevel"].(string); ok && v != "" {
-						details.QuantizationLevel = v
-					} else {
-						details.QuantizationLevel = inferQuantizationLevelFromName(modelID)
-					}
-					if details.Family != "unknown" && details.Family != "" {
-						details.Families = []string{details.Family}
-					}
+					details, caps := pm.getModelDetails(modelCfg, modelID)
 
 					runningModels = append(runningModels, OllamaProcessModelResponse{
-						Name:      modelID,
-						Model:     modelID,
-						Size:      0,
-						Digest:    fmt.Sprintf("%x", modelID),
-						Details:   details,
-						ExpiresAt: expiresAt,
-						SizeVRAM:  0,
+						Name:         modelID,
+						Model:        modelID,
+						Size:         0,
+						Digest:       fmt.Sprintf("%x", modelID),
+						Details:      details,
+						ExpiresAt:    expiresAt,
+						SizeVRAM:     0,
+						Capabilities: caps,
 					})
 				}
 			}
 			group.Unlock()
 		}
 		pm.RUnlock()
+
+		// Sort running models by name
+		sort.Slice(runningModels, func(i, j int) bool {
+			return runningModels[i].Name < runningModels[j].Name
+		})
 
 		// Handle CORS if Origin header is present
 		if origin := c.Request.Header.Get("Origin"); origin != "" {
@@ -1153,12 +1328,13 @@ type OllamaListTagsResponse struct {
 
 // OllamaModelResponse describes a single model in the list.
 type OllamaModelResponse struct {
-	Name       string             `json:"name"`
-	Model      string             `json:"model"`
-	ModifiedAt time.Time          `json:"modified_at"`
-	Size       int64              `json:"size"`
-	Digest     string             `json:"digest"`
-	Details    OllamaModelDetails `json:"details"`
+	Name         string             `json:"name"`
+	Model        string             `json:"model"`
+	ModifiedAt   time.Time          `json:"modified_at"`
+	Size         int64              `json:"size"`
+	Digest       string             `json:"digest"`
+	Details      OllamaModelDetails `json:"details"`
+	Capabilities []string           `json:"capabilities,omitempty"`
 }
 
 // OllamaModelDetails provides more details about a model.
@@ -1206,13 +1382,14 @@ type OllamaProcessResponse struct {
 
 // OllamaProcessModelResponse describes a running model process.
 type OllamaProcessModelResponse struct {
-	Name      string             `json:"name"`
-	Model     string             `json:"model"`
-	Size      int64              `json:"size"`
-	Digest    string             `json:"digest"`
-	Details   OllamaModelDetails `json:"details"`
-	ExpiresAt time.Time          `json:"expires_at"`
-	SizeVRAM  int64              `json:"size_vram"`
+	Name         string             `json:"name"`
+	Model        string             `json:"model"`
+	Size         int64              `json:"size"`
+	Digest       string             `json:"digest"`
+	Details      OllamaModelDetails `json:"details"`
+	ExpiresAt    time.Time          `json:"expires_at"`
+	SizeVRAM     int64              `json:"size_vram"`
+	Capabilities []string           `json:"capabilities,omitempty"`
 }
 
 // OllamaEmbedRequest describes a request to /api/embed.

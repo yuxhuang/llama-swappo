@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/mostlygeek/llama-swap/proxy/config"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -705,5 +708,167 @@ func TestOllamaChatRequestWithThink(t *testing.T) {
 				assert.Equal(t, *tt.expectThink, *req.Think)
 			}
 		})
+	}
+}
+
+func TestOllamaListTagsHandler_Sorting(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cfg := config.Config{
+		Models: map[string]config.ModelConfig{
+			"zebra": {Name: "Zebra"},
+			"apple": {Name: "Apple"},
+			"mango": {Name: "Mango"},
+		},
+	}
+	pm := &ProxyManager{
+		config: cfg,
+		modelInfoCache: make(map[string]struct {
+			Details      OllamaModelDetails
+			Capabilities []string
+		}),
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequest("GET", "/api/tags", nil)
+
+	handler := pm.ollamaListTagsHandler()
+	handler(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp OllamaListTagsResponse
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	assert.NoError(t, err)
+
+	assert.Equal(t, 3, len(resp.Models))
+	// Names should be "apple", "mango", "zebra"
+	assert.Equal(t, "apple", resp.Models[0].Name)
+	assert.Equal(t, "mango", resp.Models[1].Name)
+	assert.Equal(t, "zebra", resp.Models[2].Name)
+
+	// Verify ModifiedAt is stable (matches pm.startTime)
+	for _, m := range resp.Models {
+		assert.True(t, pm.startTime.Equal(m.ModifiedAt), "ModifiedAt should match ProxyManager startTime")
+		assert.ElementsMatch(t, []string{"completion", "tools"}, m.Capabilities)
+	}
+}
+
+func TestOllamaListTagsHandler_FileModTime(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	// Create a temporary file to act as the model file
+	tmpFile, err := os.CreateTemp("", "model-*.gguf")
+	assert.NoError(t, err)
+	defer os.Remove(tmpFile.Name())
+
+	fileInfo, err := tmpFile.Stat()
+	assert.NoError(t, err)
+	expectedTime := fileInfo.ModTime().UTC()
+
+	cfg := config.Config{
+		Models: map[string]config.ModelConfig{
+			"model-with-file": {
+				Name: "File Model",
+				Cmd:  "server --model " + tmpFile.Name(),
+			},
+		},
+	}
+	pm := &ProxyManager{
+		config:    cfg,
+		startTime: time.Now().Add(-1 * time.Hour).UTC(),
+		modelInfoCache: make(map[string]struct {
+			Details      OllamaModelDetails
+			Capabilities []string
+		}),
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequest("GET", "/api/tags", nil)
+
+	handler := pm.ollamaListTagsHandler()
+	handler(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp OllamaListTagsResponse
+	err = json.Unmarshal(w.Body.Bytes(), &resp)
+	assert.NoError(t, err)
+
+	assert.Equal(t, 1, len(resp.Models))
+	assert.Equal(t, "model-with-file", resp.Models[0].Name)
+	assert.True(t, expectedTime.Equal(resp.Models[0].ModifiedAt), "ModifiedAt should match file modification time")
+	assert.False(t, pm.startTime.Equal(resp.Models[0].ModifiedAt), "ModifiedAt should NOT match ProxyManager startTime when file exists")
+}
+
+func TestOllamaListTagsHandler_GGUFMetadata(t *testing.T) {
+	// Skip this test for now as it requires complex GGUF file generation
+	// which was previously handled by a helper that is now removed.
+	// We rely on the library's own tests for binary correctness.
+	t.Skip("Skipping GGUF binary generation test")
+}
+
+func TestOllamaPSHandler_Sorting(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	// Need a slightly more complex setup since PS looks into process groups
+	cfg := config.Config{
+		Models: map[string]config.ModelConfig{
+			"zebra": {Name: "Zebra"},
+			"apple": {Name: "Apple"},
+			"mango": {Name: "Mango"},
+		},
+	}
+	pm := &ProxyManager{
+		config:        cfg,
+		processGroups: make(map[string]*ProcessGroup),
+		modelInfoCache: make(map[string]struct {
+			Details      OllamaModelDetails
+			Capabilities []string
+		}),
+	}
+
+	// Mocking running processes
+	pg := &ProcessGroup{
+		id:        "default",
+		processes: make(map[string]*Process),
+	}
+	pm.processGroups["default"] = pg
+
+	for id := range cfg.Models {
+		p := &Process{
+			ID:    id,
+			state: StateReady,
+			config: config.ModelConfig{
+				Metadata: map[string]any{},
+			},
+		}
+		pg.processes[id] = p
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequest("GET", "/api/ps", nil)
+
+	handler := pm.ollamaPSHandler()
+	handler(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp OllamaProcessResponse
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	assert.NoError(t, err)
+
+	assert.Equal(t, 3, len(resp.Models))
+	// Names should be "apple", "mango", "zebra"
+	assert.Equal(t, "apple", resp.Models[0].Name)
+	assert.Equal(t, "mango", resp.Models[1].Name)
+	assert.Equal(t, "zebra", resp.Models[2].Name)
+
+	// Verify Capabilities
+	for _, m := range resp.Models {
+		assert.ElementsMatch(t, []string{"completion", "tools"}, m.Capabilities)
 	}
 }

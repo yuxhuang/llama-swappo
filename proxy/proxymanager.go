@@ -54,6 +54,16 @@ type ProxyManager struct {
 
 	// peer proxy see: #296, #433
 	peerProxy *PeerProxy
+
+	// startTime is when the ProxyManager was initialized
+	startTime time.Time
+
+	// cache for model details extracted from files
+	modelInfoCache map[string]struct {
+		Details      OllamaModelDetails
+		Capabilities []string
+	}
+	cacheMutex sync.RWMutex
 }
 
 func New(proxyConfig config.Config) *ProxyManager {
@@ -163,6 +173,13 @@ func New(proxyConfig config.Config) *ProxyManager {
 		version:   "0",
 
 		peerProxy: peerProxy,
+
+		startTime: time.Now().UTC(),
+
+		modelInfoCache: make(map[string]struct {
+			Details      OllamaModelDetails
+			Capabilities []string
+		}),
 	}
 
 	// create the process groups

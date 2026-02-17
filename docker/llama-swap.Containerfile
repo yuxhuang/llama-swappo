@@ -1,44 +1,63 @@
-ARG BASE_IMAGE=ghcr.io/ggml-org/llama.cpp
-ARG BASE_TAG=server-cuda
-FROM ${BASE_IMAGE}:${BASE_TAG}
+# --- Stage 1: Build Environment (Ubuntu 24.04 with Go & Node.js) ---
+FROM ubuntu:24.04 AS builder
 
-# has to be after the FROM
-ARG LS_VER=170
-ARG LS_REPO=mostlygeek/llama-swap
+# Prevent interactive prompts during build
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Set default UID/GID arguments
-ARG UID=10001
-ARG GID=10001
-ARG USER_HOME=/app
+# Install Node.js, Go, and build tools
+RUN apt-get update && apt-get install -y \
+    golang \
+    nodejs \
+    npm \
+    make \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Add user/group
-ENV HOME=$USER_HOME
-RUN if [ $UID -ne 0 ]; then \
-      if [ $GID -ne 0 ]; then \
-        groupadd --system --gid $GID app; \
-      fi; \
-      useradd --system --uid $UID --gid $GID \
-      --home $USER_HOME app; \
-    fi
-
-# Handle paths
-RUN mkdir --parents $HOME /app
-RUN chown --recursive $UID:$GID $HOME /app
-
-# Switch user
-USER $UID:$GID
-
+# Set working directory
 WORKDIR /app
 
-# Add /app to PATH
+# Copy source code
+COPY . .
+
+# Build the application
+# Executes the clean and all targets in your Makefile
+RUN CGO_ENABLED=0 make clean all
+
+# --- Stage 2: Runtime Environment ---
+FROM llama-server:latest
+
+# Build arguments for permissions
+ARG UID=1001
+ARG GID=1001
+ARG USER_HOME=/app
+
+# Environment setup
+ENV HOME=$USER_HOME
 ENV PATH="/app:${PATH}"
 
-RUN \
-    curl -LO "https://github.com/${LS_REPO}/releases/download/v${LS_VER}/llama-swap_${LS_VER}_linux_amd64.tar.gz" && \
-    tar -zxf "llama-swap_${LS_VER}_linux_amd64.tar.gz" && \
-    rm "llama-swap_${LS_VER}_linux_amd64.tar.gz"
+# Switch to root to handle user creation and permissions
+USER root
 
-COPY --chown=$UID:$GID config.example.yaml /app/config.yaml
+# Create the app group and user if they don't exist
+RUN if [ $UID -ne 0 ]; then \
+    groupadd --system --gid $GID app || true; \
+    useradd --system --uid $UID --gid $GID --create-home --home-dir $USER_HOME app || true; \
+    fi
 
+# Ensure the /app directory exists and is owned by the app user
+RUN mkdir -p /app && chown -R $UID:$GID /app
+
+# Copy the specific build output from the builder stage
+# Maps build/llama-swap-linux-amd64 to /app/llama-swap
+COPY --from=builder --chown=$UID:$GID /app/build/llama-swap-linux-amd64 /app/llama-swap
+COPY --from=builder --chown=$UID:$GID /app/config.example.yaml /app/config.yaml
+
+# Set workdir and drop privileges
+WORKDIR /app
+USER $UID
+
+# Healthcheck and Entrypoint
 HEALTHCHECK CMD curl -f http://localhost:8080/ || exit 1
 ENTRYPOINT [ "/app/llama-swap", "-config", "/app/config.yaml" ]
+
