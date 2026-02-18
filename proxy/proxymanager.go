@@ -509,13 +509,12 @@ func (pm *ProxyManager) swapProcessGroup(realModelName string) (*ProcessGroup, e
 
 func (pm *ProxyManager) listModelsHandler(c *gin.Context) {
 	data := make([]gin.H, 0, len(pm.config.Models))
-	createdTime := time.Now().Unix()
 
 	newRecord := func(modelId string, modelConfig config.ModelConfig) gin.H {
 		record := gin.H{
 			"id":       modelId,
 			"object":   "model",
-			"created":  createdTime,
+			"created":  pm.getModelModifiedTime(modelConfig, modelId).Unix(),
 			"owned_by": "llama-swap",
 		}
 
