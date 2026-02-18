@@ -191,6 +191,9 @@ func New(proxyConfig config.Config) *ProxyManager {
 	pm.setupGinEngine()
 	pm.RegisterOllamaRoutes()
 
+	// Preload model details during startup for Ollama-compatible API
+	pm.preloadModelDetails()
+
 	// run any startup hooks
 	if len(proxyConfig.Hooks.OnStartup.Preload) > 0 {
 		// do it in the background, don't block startup -- not sure if good idea yet
@@ -1190,5 +1193,5 @@ func (pm *ProxyManager) SetVersion(buildDate string, commit string, version stri
 	defer pm.Unlock()
 	pm.buildDate = buildDate
 	pm.commit = commit
-	pm.version = "0.13.5" //HACK to mimic ollama's API, since upstream API conflicts
+	pm.version = version
 }

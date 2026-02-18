@@ -154,6 +154,9 @@ func (pm *ProxyManager) getModelDetails(modelCfg config.ModelConfig, modelID str
 	if parsedArgs.FullModelPath != "" {
 		// Use robust GGUF parser library
 		if gf, err := gguf_parser.ParseGGUFFile(parsedArgs.FullModelPath); err == nil {
+			if pm.proxyLogger != nil {
+				pm.proxyLogger.Debugf("<%s> Extracted metadata from GGUF file: %s", modelID, parsedArgs.FullModelPath)
+			}
 			gm := gf.Metadata()
 
 			// Architecture
@@ -196,11 +199,18 @@ func (pm *ProxyManager) getModelDetails(modelCfg config.ModelConfig, modelID str
 					}
 				}
 			}
+		} else {
+			if pm.proxyLogger != nil {
+				pm.proxyLogger.Debugf("<%s> Failed to parse GGUF file: %v", modelID, err)
+			}
 		}
 	}
 
 	// Fallback to inference for missing fields in extractedDetails
 	if extractedDetails.Family == "" {
+		if pm.proxyLogger != nil {
+			pm.proxyLogger.Debugf("<%s> Falling back to inference for model family", modelID)
+		}
 		arch := inferPattern(modelID, architecturePatterns, orderedArchKeys)
 		extractedDetails.Family = inferFamilyFromName(modelID, arch)
 	}
@@ -238,6 +248,29 @@ func (pm *ProxyManager) getModelDetails(modelCfg config.ModelConfig, modelID str
 	}
 
 	return details, caps
+}
+
+func (pm *ProxyManager) preloadModelDetails() {
+	if pm.proxyLogger != nil {
+		pm.proxyLogger.Info("Preloading model details...")
+	}
+	pm.RLock()
+	modelConfigs := make(map[string]config.ModelConfig)
+	for id, cfg := range pm.config.Models {
+		modelConfigs[id] = cfg
+	}
+	pm.RUnlock()
+
+	for id, modelCfg := range modelConfigs {
+		if modelCfg.Unlisted {
+			continue
+		}
+		details, caps := pm.getModelDetails(modelCfg, id)
+		if pm.proxyLogger != nil {
+			pm.proxyLogger.Infof("<%s> Model details: family=%s, params=%s, quant=%s, caps=%v",
+				id, details.Family, details.ParameterSize, details.QuantizationLevel, caps)
+		}
+	}
 }
 
 func formatParameterCount(count uint64) string {
