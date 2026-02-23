@@ -87,11 +87,18 @@
       return "bg-gray-100 dark:bg-white/10 text-gray-600 dark:text-gray-400 border-gray-200 dark:border-white/5";
     }
 
-    // Parse parameters count (e.g., "7B" -> 7, "1.5B" -> 1.5)
+    // Parse parameters count (e.g., "7B" -> 7, "1.5B" -> 1.5, "1T" -> 1000)
     const paramsMatch = model.parameter_size.match(/(\d+(?:\.\d+)?)/);
     if (!paramsMatch) return "bg-gray-100 dark:bg-white/10 text-gray-600 dark:text-gray-400 border-gray-200 dark:border-white/5";
     
-    const params = parseFloat(paramsMatch[1]);
+    let params = parseFloat(paramsMatch[1]);
+    if (model.parameter_size.toUpperCase().includes("T")) {
+      params *= 1000;
+    } else if (model.parameter_size.toUpperCase().includes("M")) {
+      params /= 1000;
+    } else if (model.parameter_size.toUpperCase().includes("K")) {
+      params /= 1000000;
+    }
     
     // Bits per weight estimate
     let bits = 4; // default to 4-bit
