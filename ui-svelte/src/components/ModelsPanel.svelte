@@ -10,8 +10,34 @@
   const showUnlistedStore = persistentStore<boolean>("showUnlisted", true);
   const showIdorNameStore = persistentStore<"id" | "name">("showIdorName", "id");
 
+  let quantFilter = $state<string[]>([]);
+  let capFilter = $state<string[]>([]);
+
+  let availableQuants = $derived.by(() => {
+    const quants = new Set<string>();
+    $models.forEach((m) => {
+      if (m.quantization_level && m.quantization_level !== "unknown") {
+        quants.add(m.quantization_level);
+      }
+    });
+    return Array.from(quants).sort();
+  });
+
+  let availableCaps = $derived.by(() => {
+    const caps = new Set<string>();
+    $models.forEach((m) => {
+      m.capabilities?.forEach((c) => caps.add(c));
+    });
+    return Array.from(caps).sort();
+  });
+
   let filteredModels = $derived.by(() => {
-    const filtered = $models.filter((model) => $showUnlistedStore || !model.unlisted);
+    const filtered = $models.filter((model) => {
+      const matchesUnlisted = $showUnlistedStore || !model.unlisted;
+      const matchesQuant = quantFilter.length === 0 || (model.quantization_level && quantFilter.includes(model.quantization_level));
+      const matchesCap = capFilter.length === 0 || (model.capabilities && capFilter.some((c) => model.capabilities?.includes(c)));
+      return matchesUnlisted && matchesQuant && matchesCap;
+    });
     const peerModels = filtered.filter((m) => m.peerID);
 
     // Group peer models by peerID
@@ -52,6 +78,22 @@
 
   function getModelDisplay(model: Model): string {
     return $showIdorNameStore === "id" ? model.id : (model.name || model.id);
+  }
+
+  function toggleQuant(q: string): void {
+    if (quantFilter.includes(q)) {
+      quantFilter = quantFilter.filter((item) => item !== q);
+    } else {
+      quantFilter = [...quantFilter, q];
+    }
+  }
+
+  function toggleCap(c: string): void {
+    if (capFilter.includes(c)) {
+      capFilter = capFilter.filter((item) => item !== c);
+    } else {
+      capFilter = [...capFilter, c];
+    }
   }
 
   function getQuantColor(quant: string | undefined): string {
@@ -233,6 +275,39 @@
         </button>
       </div>
     {/if}
+
+    <div class="mt-4 flex flex-col gap-2 border-b border-gray-200 dark:border-white/10 pb-4">
+      {#if availableQuants.length > 0}
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-xs font-semibold text-txtsecondary min-w-[80px]">Quantization:</span>
+          <div class="flex flex-wrap gap-1">
+            {#each availableQuants as q}
+              <button 
+                class="filter-tag {quantFilter.includes(q) ? 'filter-tag--active' : ''}" 
+                onclick={() => toggleQuant(q)}
+              >
+                {q}
+              </button>
+            {/each}
+          </div>
+        </div>
+      {/if}
+      {#if availableCaps.length > 0}
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-xs font-semibold text-txtsecondary min-w-[80px]">Capabilities:</span>
+          <div class="flex flex-wrap gap-1">
+            {#each availableCaps as c}
+              <button 
+                class="filter-tag {capFilter.includes(c) ? 'filter-tag--active' : ''}" 
+                onclick={() => toggleCap(c)}
+              >
+                {c}
+              </button>
+            {/each}
+          </div>
+        </div>
+      {/if}
+    </div>
   </div>
 
   <div class="flex-1 overflow-y-auto">
@@ -316,3 +391,52 @@
     {/if}
   </div>
 </div>
+
+<style>
+  .filter-tag {
+    display: inline-block;
+    padding: 0.125rem 0.5rem;
+    font-size: 10px;
+    font-weight: 500;
+    border-radius: 0.25rem;
+    border: 1px solid #e5e7eb;
+    background-color: #f9fafb;
+    color: #4b5563;
+    transition: all 0.2s;
+    cursor: pointer;
+  }
+
+  :global(.dark) .filter-tag {
+    border-color: rgba(255, 255, 255, 0.1);
+    background-color: rgba(255, 255, 255, 0.05);
+    color: #9ca3af;
+  }
+
+  .filter-tag:hover {
+    background-color: #f3f4f6;
+  }
+
+  :global(.dark) .filter-tag:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+  }
+
+  .filter-tag--active {
+    background-color: rgba(50, 184, 198, 0.1);
+    border-color: rgba(50, 184, 198, 0.3);
+    color: #32b8c6;
+  }
+
+  .filter-tag--active:hover {
+    background-color: rgba(50, 184, 198, 0.2);
+  }
+
+  :global(.dark) .filter-tag--active {
+    background-color: rgba(33, 128, 141, 0.2);
+    border-color: rgba(33, 128, 141, 0.4);
+    color: #21808d;
+  }
+
+  :global(.dark) .filter-tag--active:hover {
+    background-color: rgba(33, 128, 141, 0.3);
+  }
+</style>
