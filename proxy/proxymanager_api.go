@@ -14,12 +14,13 @@ import (
 )
 
 type Model struct {
-	Id          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	State       string `json:"state"`
-	Unlisted    bool   `json:"unlisted"`
-	PeerID      string `json:"peerID"`
+	Id            string `json:"id"`
+	Name          string `json:"name"`
+	Description   string `json:"description"`
+	State         string `json:"state"`
+	Unlisted      bool   `json:"unlisted"`
+	PeerID        string `json:"peerID"`
+	ParameterSize string `json:"parameter_size,omitempty"`
 }
 
 func addApiHandlers(pm *ProxyManager) {
@@ -56,6 +57,8 @@ func (pm *ProxyManager) getModelStatus() []Model {
 		// Get process state
 		processGroup := pm.findGroupByModelName(modelID)
 		state := "unknown"
+		details, _ := pm.getModelDetails(pm.config.Models[modelID], modelID)
+
 		if processGroup != nil {
 			process := processGroup.processes[modelID]
 			if process != nil {
@@ -78,11 +81,12 @@ func (pm *ProxyManager) getModelStatus() []Model {
 			}
 		}
 		models = append(models, Model{
-			Id:          modelID,
-			Name:        pm.config.Models[modelID].Name,
-			Description: pm.config.Models[modelID].Description,
-			State:       state,
-			Unlisted:    pm.config.Models[modelID].Unlisted,
+			Id:            modelID,
+			Name:          pm.config.Models[modelID].Name,
+			Description:   pm.config.Models[modelID].Description,
+			State:         state,
+			Unlisted:      pm.config.Models[modelID].Unlisted,
+			ParameterSize: details.ParameterSize,
 		})
 	}
 
