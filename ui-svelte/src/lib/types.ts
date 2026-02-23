@@ -11,6 +11,7 @@ export interface Model {
   peerID: string;
   parameter_size?: string;
   quantization_level?: string;
+  capabilities?: string[];
 }
 
 export interface Metrics {

@@ -14,14 +14,15 @@ import (
 )
 
 type Model struct {
-	Id                string `json:"id"`
-	Name              string `json:"name"`
-	Description       string `json:"description"`
-	State             string `json:"state"`
-	Unlisted          bool   `json:"unlisted"`
-	PeerID            string `json:"peerID"`
-	ParameterSize     string `json:"parameter_size,omitempty"`
-	QuantizationLevel string `json:"quantization_level,omitempty"`
+	Id                string   `json:"id"`
+	Name              string   `json:"name"`
+	Description       string   `json:"description"`
+	State             string   `json:"state"`
+	Unlisted          bool     `json:"unlisted"`
+	PeerID            string   `json:"peerID"`
+	ParameterSize     string   `json:"parameter_size,omitempty"`
+	QuantizationLevel string   `json:"quantization_level,omitempty"`
+	Capabilities      []string `json:"capabilities,omitempty"`
 }
 
 func addApiHandlers(pm *ProxyManager) {
@@ -58,7 +59,7 @@ func (pm *ProxyManager) getModelStatus() []Model {
 		// Get process state
 		processGroup := pm.findGroupByModelName(modelID)
 		state := "unknown"
-		details, _ := pm.getModelDetails(pm.config.Models[modelID], modelID)
+		details, caps := pm.getModelDetails(pm.config.Models[modelID], modelID)
 
 		if processGroup != nil {
 			process := processGroup.processes[modelID]
@@ -89,6 +90,7 @@ func (pm *ProxyManager) getModelStatus() []Model {
 			Unlisted:          pm.config.Models[modelID].Unlisted,
 			ParameterSize:     details.ParameterSize,
 			QuantizationLevel: details.QuantizationLevel,
+			Capabilities:      caps,
 		})
 	}
 

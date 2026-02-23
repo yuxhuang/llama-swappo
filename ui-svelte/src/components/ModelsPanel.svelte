@@ -126,6 +126,15 @@
     // Fast: Pastel Blue
     return "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-800/30";
   }
+
+  function getCapabilityColor(cap: string): string {
+    const c = cap.toLowerCase();
+    if (c === "tools") return "bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 border-purple-200 dark:border-purple-800/30";
+    if (c === "vision") return "bg-pink-100 dark:bg-pink-900/30 text-pink-700 dark:text-pink-400 border-pink-200 dark:border-pink-800/30";
+    if (c === "embeddings") return "bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800/30";
+    if (c === "completion") return "bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-white/5";
+    return "bg-gray-100 dark:bg-white/10 text-gray-600 dark:text-gray-400 border-gray-200 dark:border-white/5";
+  }
 </script>
 
 <div class="card h-full flex flex-col">
@@ -247,6 +256,15 @@
                   </span>
                 {/if}
               </div>
+              {#if model.capabilities && model.capabilities.length > 0}
+                <div class="flex flex-wrap gap-1 mt-1">
+                  {#each model.capabilities as cap}
+                    <span class="px-1.5 py-0.2 text-[9px] font-medium rounded-sm lowercase border shrink-0 {getCapabilityColor(cap)}">
+                      {cap}
+                    </span>
+                  {/each}
+                </div>
+              {/if}
               {#if model.description}
                 <p class={(model.unlisted ? "text-opacity-70" : "") + " ml-0"}><em>{model.description}</em></p>
               {/if}
