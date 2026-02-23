@@ -160,14 +160,14 @@
           <tr class="border-b hover:bg-secondary-hover border-gray-200">
             <td class={model.unlisted ? "text-txtsecondary" : ""}>
               <div class="flex items-center gap-2">
+                <a href="/upstream/{model.id}/" class="font-semibold" target="_blank">
+                  {getModelDisplay(model)}
+                </a>
                 {#if model.parameter_size && model.parameter_size !== "unknown"}
                   <span class="px-1.5 py-0.5 text-[10px] font-bold bg-gray-100 dark:bg-white/10 text-gray-600 dark:text-gray-400 rounded-md uppercase tracking-wider border border-gray-200 dark:border-white/5 shrink-0">
                     {model.parameter_size}
                   </span>
                 {/if}
-                <a href="/upstream/{model.id}/" class="font-semibold" target="_blank">
-                  {getModelDisplay(model)}
-                </a>
               </div>
               {#if model.description}
                 <p class={(model.unlisted ? "text-opacity-70" : "") + " ml-0"}><em>{model.description}</em></p>
