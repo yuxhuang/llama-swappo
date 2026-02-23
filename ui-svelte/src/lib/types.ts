@@ -10,6 +10,7 @@ export interface Model {
   unlisted: boolean;
   peerID: string;
   parameter_size?: string;
+  quantization_level?: string;
 }
 
 export interface Metrics {

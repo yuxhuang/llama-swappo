@@ -53,6 +53,34 @@
   function getModelDisplay(model: Model): string {
     return $showIdorNameStore === "id" ? model.id : (model.name || model.id);
   }
+
+  function getQuantColor(quant: string | undefined): string {
+    if (!quant || quant === "unknown") return "bg-gray-100 dark:bg-white/10 text-gray-600 dark:text-gray-400 border-gray-200 dark:border-white/5";
+    
+    const q = quant.toUpperCase();
+    if (q.includes("F32") || q.includes("F16") || q.includes("BF16")) {
+      // Best: Pastel Green
+      return "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 border-green-200 dark:border-green-800/30";
+    }
+    if (q.includes("Q8") || q.includes("IQ8")) {
+      // Better: Pastel Teal
+      return "bg-teal-100 dark:bg-teal-900/30 text-teal-700 dark:text-teal-400 border-teal-200 dark:border-teal-800/30";
+    }
+    if (q.includes("Q6") || q.includes("IQ6")) {
+      // Great: Pastel Blue
+      return "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-800/30";
+    }
+    if (q.includes("Q5") || q.includes("IQ5") || q.includes("Q4") || q.includes("IQ4") || q.includes("FP4")) {
+      // Good: Pastel Yellow/Amber
+      return "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-800/30";
+    }
+    if (q.includes("Q3") || q.includes("IQ3") || q.includes("Q2") || q.includes("IQ2")) {
+      // Okay: Pastel Orange/Grey
+      return "bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 border-orange-200 dark:border-orange-800/30";
+    }
+    
+    return "bg-gray-100 dark:bg-white/10 text-gray-600 dark:text-gray-400 border-gray-200 dark:border-white/5";
+  }
 </script>
 
 <div class="card h-full flex flex-col">
@@ -163,6 +191,11 @@
                 <a href="/upstream/{model.id}/" class="font-semibold" target="_blank">
                   {getModelDisplay(model)}
                 </a>
+                {#if model.quantization_level && model.quantization_level !== "unknown"}
+                  <span class="px-1.5 py-0.5 text-[10px] font-bold rounded-md uppercase tracking-wider border shrink-0 {getQuantColor(model.quantization_level)}">
+                    {model.quantization_level}
+                  </span>
+                {/if}
                 {#if model.parameter_size && model.parameter_size !== "unknown"}
                   <span class="px-1.5 py-0.5 text-[10px] font-bold bg-gray-100 dark:bg-white/10 text-gray-600 dark:text-gray-400 rounded-md uppercase tracking-wider border border-gray-200 dark:border-white/5 shrink-0">
                     {model.parameter_size}

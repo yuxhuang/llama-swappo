@@ -14,13 +14,14 @@ import (
 )
 
 type Model struct {
-	Id            string `json:"id"`
-	Name          string `json:"name"`
-	Description   string `json:"description"`
-	State         string `json:"state"`
-	Unlisted      bool   `json:"unlisted"`
-	PeerID        string `json:"peerID"`
-	ParameterSize string `json:"parameter_size,omitempty"`
+	Id                string `json:"id"`
+	Name              string `json:"name"`
+	Description       string `json:"description"`
+	State             string `json:"state"`
+	Unlisted          bool   `json:"unlisted"`
+	PeerID            string `json:"peerID"`
+	ParameterSize     string `json:"parameter_size,omitempty"`
+	QuantizationLevel string `json:"quantization_level,omitempty"`
 }
 
 func addApiHandlers(pm *ProxyManager) {
@@ -81,12 +82,13 @@ func (pm *ProxyManager) getModelStatus() []Model {
 			}
 		}
 		models = append(models, Model{
-			Id:            modelID,
-			Name:          pm.config.Models[modelID].Name,
-			Description:   pm.config.Models[modelID].Description,
-			State:         state,
-			Unlisted:      pm.config.Models[modelID].Unlisted,
-			ParameterSize: details.ParameterSize,
+			Id:                modelID,
+			Name:              pm.config.Models[modelID].Name,
+			Description:       pm.config.Models[modelID].Description,
+			State:             state,
+			Unlisted:          pm.config.Models[modelID].Unlisted,
+			ParameterSize:     details.ParameterSize,
+			QuantizationLevel: details.QuantizationLevel,
 		})
 	}
 
