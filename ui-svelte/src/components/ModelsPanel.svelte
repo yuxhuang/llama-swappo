@@ -81,6 +81,51 @@
     
     return "bg-gray-100 dark:bg-white/10 text-gray-600 dark:text-gray-400 border-gray-200 dark:border-white/5";
   }
+
+  function getSizeColor(model: Model): string {
+    if (!model.parameter_size || model.parameter_size === "unknown") {
+      return "bg-gray-100 dark:bg-white/10 text-gray-600 dark:text-gray-400 border-gray-200 dark:border-white/5";
+    }
+
+    // Parse parameters count (e.g., "7B" -> 7, "1.5B" -> 1.5)
+    const paramsMatch = model.parameter_size.match(/(\d+(?:\.\d+)?)/);
+    if (!paramsMatch) return "bg-gray-100 dark:bg-white/10 text-gray-600 dark:text-gray-400 border-gray-200 dark:border-white/5";
+    
+    const params = parseFloat(paramsMatch[1]);
+    
+    // Bits per weight estimate
+    let bits = 4; // default to 4-bit
+    const q = (model.quantization_level || "").toUpperCase();
+    
+    if (q.includes("F32")) bits = 32;
+    else if (q.includes("F16") || q.includes("BF16")) bits = 16;
+    else if (q.includes("Q8") || q.includes("IQ8")) bits = 8;
+    else if (q.includes("Q6") || q.includes("IQ6")) bits = 6;
+    else if (q.includes("Q5") || q.includes("IQ5")) bits = 5;
+    else if (q.includes("Q4") || q.includes("IQ4")) bits = 4;
+    else if (q.includes("Q3") || q.includes("IQ3")) bits = 3;
+    else if (q.includes("Q2") || q.includes("IQ2")) bits = 2;
+
+    const estimatedGB = (params * bits) / 8;
+
+    // Thresholds for 96GB VRAM
+    // Very Fast: < 1/4 (24GB)
+    // Fast: < 3/4 (72GB)
+    // Slow: > 3/4 (72GB) or > 300B
+    
+    if (params > 300 || estimatedGB > 72) {
+      // Slow: Pastel Red/Rose
+      return "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 border-red-200 dark:border-red-800/30";
+    }
+    
+    if (estimatedGB < 24) {
+      // Very Fast: Pastel Green
+      return "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 border-green-200 dark:border-green-800/30";
+    }
+    
+    // Fast: Pastel Blue
+    return "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-800/30";
+  }
 </script>
 
 <div class="card h-full flex flex-col">
@@ -197,7 +242,7 @@
                   </span>
                 {/if}
                 {#if model.parameter_size && model.parameter_size !== "unknown"}
-                  <span class="px-1.5 py-0.5 text-[10px] font-bold bg-gray-100 dark:bg-white/10 text-gray-600 dark:text-gray-400 rounded-md uppercase tracking-wider border border-gray-200 dark:border-white/5 shrink-0">
+                  <span class="px-1.5 py-0.5 text-[10px] font-bold rounded-md uppercase tracking-wider border shrink-0 {getSizeColor(model)}">
                     {model.parameter_size}
                   </span>
                 {/if}
