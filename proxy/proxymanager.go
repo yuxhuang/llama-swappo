@@ -511,6 +511,8 @@ func (pm *ProxyManager) listModelsHandler(c *gin.Context) {
 	data := make([]gin.H, 0, len(pm.config.Models))
 
 	newRecord := func(modelId string, modelConfig config.ModelConfig) gin.H {
+		details, caps := pm.getModelDetails(modelConfig, modelId)
+
 		record := gin.H{
 			"id":       modelId,
 			"object":   "model",
@@ -531,6 +533,27 @@ func (pm *ProxyManager) listModelsHandler(c *gin.Context) {
 				"llamaswap": modelConfig.Metadata,
 			}
 		}
+
+		// Add context window and capabilities for Copilot/OpenRouter compatibility
+		parser := NewLlamaServerParser()
+		parsedArgs := parser.Parse(modelConfig.Cmd, modelId)
+		ctxLength := parsedArgs.ContextLength
+		if v, ok := modelConfig.Metadata["contextLength"].(int); ok && v != 0 {
+			ctxLength = v
+		}
+		if ctxLength == 0 {
+			ctxLength = 2048 // Default fallback
+		}
+		record["context_window"] = ctxLength
+
+		// Expose capabilities
+		if len(caps) > 0 {
+			record["capabilities"] = caps
+		}
+
+		// Ollama details for extra info
+		record["details"] = details
+
 		return record
 	}
 
