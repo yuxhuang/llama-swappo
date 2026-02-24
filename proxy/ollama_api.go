@@ -432,8 +432,11 @@ func (pm *ProxyManager) ollamaShowHandler() gin.HandlerFunc {
 		details, caps := pm.getModelDetails(modelCfg, id)
 
 		arch := details.Family
-		if arch == "" {
+		if arch == "" || arch == "unknown" {
 			arch = parsedArgs.Architecture
+		}
+		if arch == "" || arch == "unknown" {
+			arch = "llama" // Fallback for key construction
 		}
 		ctxLength := parsedArgs.ContextLength
 
