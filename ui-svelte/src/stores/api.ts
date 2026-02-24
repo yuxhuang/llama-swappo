@@ -105,7 +105,7 @@ export function enableAPIEvents(enabled: boolean): void {
 connectionState.subscribe(async (status) => {
   if (status === "connected") {
     try {
-      const response = await fetch("/api/version");
+      const response = await fetch("/api/llamaswap/version");
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }

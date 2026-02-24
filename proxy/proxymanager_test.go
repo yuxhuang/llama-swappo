@@ -1241,7 +1241,7 @@ func TestProxyManager_ApiGetVersion(t *testing.T) {
 	proxy.SetVersion(versionTest["build_date"], versionTest["commit"], versionTest["version"])
 	defer proxy.StopProcesses(StopWaitForInflightRequest)
 
-	req := httptest.NewRequest("GET", "/api/version", nil)
+	req := httptest.NewRequest("GET", "/api/llamaswap/version", nil)
 	w := CreateTestResponseRecorder()
 
 	proxy.ServeHTTP(w, req)
