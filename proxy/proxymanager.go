@@ -545,6 +545,7 @@ func (pm *ProxyManager) listModelsHandler(c *gin.Context) {
 			ctxLength = 2048 // Default fallback
 		}
 		record["context_window"] = ctxLength
+		record["context_length"] = ctxLength
 
 		// Expose capabilities
 		if len(caps) > 0 {

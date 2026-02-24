@@ -361,14 +361,26 @@ func (pm *ProxyManager) ollamaListTagsHandler() gin.HandlerFunc {
 
 			details, caps := pm.getModelDetails(modelCfg, id)
 
+			parser := NewLlamaServerParser()
+			parsedArgs := parser.Parse(modelCfg.Cmd, id)
+			ctxLength := parsedArgs.ContextLength
+			if v, ok := modelCfg.Metadata["contextLength"].(int); ok && v != 0 {
+				ctxLength = v
+			}
+			if ctxLength == 0 {
+				ctxLength = 2048
+			}
+			details.ContextLength = ctxLength
+
 			models = append(models, OllamaModelResponse{
-				Name:         id,
-				Model:        id,
-				ModifiedAt:   pm.getModelModifiedTime(modelCfg, id),
-				Size:         0,
-				Digest:       fmt.Sprintf("%x", id),
-				Details:      details,
-				Capabilities: caps,
+				Name:          id,
+				Model:         id,
+				ModifiedAt:    pm.getModelModifiedTime(modelCfg, id),
+				Size:          0,
+				Digest:        fmt.Sprintf("%x", id),
+				Details:       details,
+				Capabilities:  caps,
+				ContextLength: ctxLength,
 			})
 		}
 		pm.RUnlock()
@@ -440,10 +452,11 @@ func (pm *ProxyManager) ollamaShowHandler() gin.HandlerFunc {
 		}
 
 		resp := OllamaShowResponse{
-			Details:      details,
-			ModelInfo:    modelInfo,
-			Capabilities: caps,
-			ModifiedAt:   pm.getModelModifiedTime(modelCfg, id),
+			Details:       details,
+			ModelInfo:     modelInfo,
+			Capabilities:  caps,
+			ModifiedAt:    pm.getModelModifiedTime(modelCfg, id),
+			ContextLength: ctxLength,
 		}
 
 		// Handle CORS if Origin header is present
@@ -1361,13 +1374,14 @@ type OllamaListTagsResponse struct {
 
 // OllamaModelResponse describes a single model in the list.
 type OllamaModelResponse struct {
-	Name         string             `json:"name"`
-	Model        string             `json:"model"`
-	ModifiedAt   time.Time          `json:"modified_at"`
-	Size         int64              `json:"size"`
-	Digest       string             `json:"digest"`
-	Details      OllamaModelDetails `json:"details"`
-	Capabilities []string           `json:"capabilities,omitempty"`
+	Name          string             `json:"name"`
+	Model         string             `json:"model"`
+	ModifiedAt    time.Time          `json:"modified_at"`
+	Size          int64              `json:"size"`
+	Digest        string             `json:"digest"`
+	Details       OllamaModelDetails `json:"details"`
+	Capabilities  []string           `json:"capabilities,omitempty"`
+	ContextLength int                `json:"context_length,omitempty"`
 }
 
 // OllamaModelDetails provides more details about a model.
@@ -1378,6 +1392,7 @@ type OllamaModelDetails struct {
 	Families          []string `json:"families,omitempty"`
 	ParameterSize     string   `json:"parameter_size,omitempty"`
 	QuantizationLevel string   `json:"quantization_level,omitempty"`
+	ContextLength     int      `json:"context_length,omitempty"`
 }
 
 type OllamaTensor struct {
@@ -1406,6 +1421,7 @@ type OllamaShowResponse struct {
 	Tensors       []OllamaTensor     `json:"tensors,omitempty"`
 	Capabilities  []string           `json:"capabilities,omitempty"`
 	ModifiedAt    time.Time          `json:"modified_at,omitempty"`
+	ContextLength int                `json:"context_length,omitempty"`
 }
 
 // OllamaProcessResponse is the response from /api/ps.
