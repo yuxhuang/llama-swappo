@@ -25,6 +25,7 @@ COPY . .
 RUN CGO_ENABLED=0 make clean all
 
 # --- Stage 2: Runtime Environment ---
+FROM ikllama-server:latest AS ikllama
 FROM llama-server:latest
 
 # Build arguments for permissions
@@ -42,16 +43,20 @@ USER root
 # Create the app group and user if they don't exist
 RUN if [ $UID -ne 0 ]; then \
     groupadd --system --gid $GID app || true; \
-    useradd --system --uid $UID --gid $GID --create-home --home-dir $USER_HOME app || true; \
+    groupadd --system --gid 995 docker || true; \
+    useradd --system --uid $UID --gid $GID -G 995 --create-home --home-dir $USER_HOME app || true; \
     fi
+
 
 # Ensure the /app directory exists and is owned by the app user
 RUN mkdir -p /app && chown -R $UID:$GID /app
+RUN mkdir -p /ikllama && chown -R $UID:$GID /ikllama
 
 # Copy the specific build output from the builder stage
 # Maps build/llama-swap-linux-amd64 to /app/llama-swap
 COPY --from=builder --chown=$UID:$GID /app/build/llama-swap-linux-amd64 /app/llama-swap
 COPY --from=builder --chown=$UID:$GID /app/config.example.yaml /app/config.yaml
+COPY --from=ikllama --chown=$UID:$GID /llama-server /usr/local/lib/* /ikllama
 
 # Set workdir and drop privileges
 WORKDIR /app
