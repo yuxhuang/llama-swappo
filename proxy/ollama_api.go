@@ -82,7 +82,7 @@ func (pm *ProxyManager) getModelModifiedTime(modelCfg config.ModelConfig, modelI
 
 func (pm *ProxyManager) getModelDetails(modelCfg config.ModelConfig, modelID string) (OllamaModelDetails, []string) {
 	// 1. Check if we have manually provided metadata for details
-	details := OllamaModelDetails{Format: "gguf"}
+	details := OllamaModelDetails{}
 	if family, ok := modelCfg.Metadata["family"].(string); ok && family != "" {
 		details.Family = family
 	}
@@ -91,6 +91,9 @@ func (pm *ProxyManager) getModelDetails(modelCfg config.ModelConfig, modelID str
 	}
 	if quantLevel, ok := modelCfg.Metadata["quantizationLevel"].(string); ok && quantLevel != "" {
 		details.QuantizationLevel = quantLevel
+	}
+	if format, ok := modelCfg.Metadata["format"].(string); ok && format != "" {
+		details.Format = format
 	}
 
 	// Manual override for capabilities
@@ -149,59 +152,129 @@ func (pm *ProxyManager) getModelDetails(modelCfg config.ModelConfig, modelID str
 		}
 	}
 
-	extractedDetails := OllamaModelDetails{Format: "gguf"}
+	extractedDetails := OllamaModelDetails{Format: parsedArgs.Format}
+	if extractedDetails.Format == "" {
+		extractedDetails.Format = "gguf" // default
+	}
 
 	if parsedArgs.FullModelPath != "" {
-		// Use robust GGUF parser library
-		if gf, err := gguf_parser.ParseGGUFFile(parsedArgs.FullModelPath); err == nil {
-			if pm.proxyLogger != nil {
-				pm.proxyLogger.Debugf("<%s> Extracted metadata from GGUF file: %s", modelID, parsedArgs.FullModelPath)
-			}
-			gm := gf.Metadata()
+		if parsedArgs.IsDirectory {
+			// Try HF config.json
+			if hf, err := ParseHFConfig(parsedArgs.FullModelPath); err == nil {
+				if pm.proxyLogger != nil {
+					pm.proxyLogger.Debugf("<%s> Extracted metadata from HF config.json: %s", modelID, parsedArgs.FullModelPath)
+				}
 
-			// Architecture
-			extractedDetails.Family = gm.Architecture
+				// Format detection
+				if hf.TransformerVersion != "" {
+					extractedDetails.Format = "transformers"
+				}
 
-			// Parameter Count
-			if pCount := gm.Parameters; pCount > 0 {
-				extractedDetails.ParameterSize = pCount.String()
-			}
+				// Architecture / Family
+				if len(hf.Architecture) > 0 {
+					extractedDetails.Family = hf.Architecture[0]
+				} else if hf.ModelType != "" {
+					extractedDetails.Family = hf.ModelType
+				}
 
-			// Quantization Level
-			extractedDetails.QuantizationLevel = strings.TrimPrefix(gm.FileType.String(), "MOSTLY_")
+				// Context Length
+				if hf.MaxPositionEmbeddings > 0 {
+					extractedDetails.ContextLength = hf.MaxPositionEmbeddings
+				} else if hf.ContextLength > 0 {
+					extractedDetails.ContextLength = hf.ContextLength
+				} else if hf.MaxSeqLen > 0 {
+					extractedDetails.ContextLength = hf.MaxSeqLen
+				} else if hf.ModelMaxLen > 0 {
+					extractedDetails.ContextLength = hf.ModelMaxLen
+				}
 
-			// Vision check
-			if gm.Architecture == "llava" || gm.Architecture == "clip" {
-				foundVision := false
-				for _, c := range caps {
-					if c == "vision" {
-						foundVision = true
-						break
+				// Parameter inference (very rough estimate if possible)
+				if hf.NumHiddenLayers > 0 && hf.HiddenSize > 0 {
+					// Params approx: 12 * layers * hidden^2
+					// But it's easier to just use the modelID/path regex we already have
+					// unless we want to do more complex math.
+					// Let's stick to name-based inference for now as it's more reliable
+					// than simple math for MoE models etc.
+				}
+
+				// Quantization detection
+				if len(hf.Quantization) > 0 {
+					if method, ok := hf.Quantization["quant_method"].(string); ok {
+						extractedDetails.QuantizationLevel = strings.ToUpper(method)
+					} else if _, ok := hf.Quantization["bitsandbytes_base_model"]; ok {
+						extractedDetails.QuantizationLevel = "BNB"
 					}
+				} else if hf.TorchDataType != "" {
+					extractedDetails.QuantizationLevel = strings.ToUpper(hf.TorchDataType)
 				}
-				if !foundVision {
-					caps = append(caps, "vision")
-				}
-			}
 
-			// Tool check via chat template
-			if kv, ok := gf.Header.MetadataKV.Get("tokenizer.chat_template"); ok {
-				if template := kv.ValueString(); strings.Contains(template, "tool_calls") || strings.Contains(template, "available_tools") {
-					foundTools := false
+				// Vision check for HF models
+				archLower := strings.ToLower(extractedDetails.Family)
+				if strings.Contains(archLower, "vl") || strings.Contains(archLower, "vision") {
+					foundVision := false
 					for _, c := range caps {
-						if c == "tools" {
-							foundTools = true
+						if c == "vision" {
+							foundVision = true
 							break
 						}
 					}
-					if !foundTools {
-						caps = append(caps, "tools")
+					if !foundVision {
+						caps = append(caps, "vision")
 					}
 				}
 			}
-		} else {
-			if pm.proxyLogger != nil {
-				pm.proxyLogger.Debugf("<%s> Failed to parse GGUF file: %v", modelID, err)
+		} else if strings.HasSuffix(parsedArgs.FullModelPath, ".gguf") {
+			// Use robust GGUF parser library
+			if gf, err := gguf_parser.ParseGGUFFile(parsedArgs.FullModelPath); err == nil {
+				if pm.proxyLogger != nil {
+					pm.proxyLogger.Debugf("<%s> Extracted metadata from GGUF file: %s", modelID, parsedArgs.FullModelPath)
+				}
+				gm := gf.Metadata()
+
+				// Architecture
+				extractedDetails.Family = gm.Architecture
+
+				// Parameter Count
+				if pCount := gm.Parameters; pCount > 0 {
+					extractedDetails.ParameterSize = pCount.String()
+				}
+
+				// Quantization Level
+				extractedDetails.QuantizationLevel = strings.TrimPrefix(gm.FileType.String(), "MOSTLY_")
+
+				// Vision check
+				if gm.Architecture == "llava" || gm.Architecture == "clip" {
+					foundVision := false
+					for _, c := range caps {
+						if c == "vision" {
+							foundVision = true
+							break
+						}
+					}
+					if !foundVision {
+						caps = append(caps, "vision")
+					}
+				}
+
+				// Tool check via chat template
+				if kv, ok := gf.Header.MetadataKV.Get("tokenizer.chat_template"); ok {
+					if template := kv.ValueString(); strings.Contains(template, "tool_calls") || strings.Contains(template, "available_tools") {
+						foundTools := false
+						for _, c := range caps {
+							if c == "tools" {
+								foundTools = true
+								break
+							}
+						}
+						if !foundTools {
+							caps = append(caps, "tools")
+						}
+					}
+				}
+			} else {
+				if pm.proxyLogger != nil {
+					pm.proxyLogger.Debugf("<%s> Failed to parse GGUF file: %v", modelID, err)
+				}
 			}
 		}
 	}
@@ -238,6 +311,12 @@ func (pm *ProxyManager) getModelDetails(modelCfg config.ModelConfig, modelID str
 	}
 	if details.QuantizationLevel == "" {
 		details.QuantizationLevel = extractedDetails.QuantizationLevel
+	}
+	if details.Format == "" {
+		details.Format = extractedDetails.Format
+	}
+	if details.ContextLength == 0 {
+		details.ContextLength = extractedDetails.ContextLength
 	}
 	if details.Family != "" && details.Family != "unknown" {
 		details.Families = []string{details.Family}
@@ -361,9 +440,12 @@ func (pm *ProxyManager) ollamaListTagsHandler() gin.HandlerFunc {
 
 			details, caps := pm.getModelDetails(modelCfg, id)
 
-			parser := NewLlamaServerParser()
-			parsedArgs := parser.Parse(modelCfg.Cmd, id)
-			ctxLength := parsedArgs.ContextLength
+			ctxLength := details.ContextLength
+			if ctxLength == 0 {
+				parser := NewLlamaServerParser()
+				parsedArgs := parser.Parse(modelCfg.Cmd, id)
+				ctxLength = parsedArgs.ContextLength
+			}
 			if v, ok := modelCfg.Metadata["contextLength"].(int); ok && v != 0 {
 				ctxLength = v
 			}
@@ -438,7 +520,10 @@ func (pm *ProxyManager) ollamaShowHandler() gin.HandlerFunc {
 		if arch == "" || arch == "unknown" {
 			arch = "llama" // Fallback for key construction
 		}
-		ctxLength := parsedArgs.ContextLength
+		ctxLength := details.ContextLength
+		if ctxLength == 0 {
+			ctxLength = parsedArgs.ContextLength
+		}
 
 		// Override with metadata if present
 		if v, ok := modelCfg.Metadata["contextLength"].(int); ok && v != 0 {

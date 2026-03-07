@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -20,6 +22,8 @@ type ServerArgs struct {
 	CmdAlias          string
 	CmdModelPath      string // Base name of the model file from --model arg
 	FullModelPath     string // Full path to the model file from --model arg
+	Format            string // gguf, safetensors, transformers, etc.
+	IsDirectory       bool   // True if FullModelPath points to a directory (HF model)
 }
 
 // ServerArgParser defines an interface for parsing server command line arguments.
@@ -168,7 +172,38 @@ func (p *LlamaServerParser) Parse(cmdStr string, modelID string) ServerArgs {
 			if i+1 < len(args) {
 				parsed.FullModelPath = args[i+1]
 				parsed.CmdModelPath = filepath.Base(args[i+1])
+				// check if it is a directory
+				if info, err := os.Stat(parsed.FullModelPath); err == nil && info.IsDir() {
+					parsed.IsDirectory = true
+					parsed.Format = "safetensors" // assume HF directory initially
+				}
+				if parsed.Format == "" && strings.HasSuffix(parsed.FullModelPath, ".gguf") {
+					parsed.Format = "gguf"
+				}
 				i++
+			}
+		case "--max-model-len": // vllm specific
+			if i+1 < len(args) {
+				if valInt, err := strconv.Atoi(args[i+1]); err == nil {
+					parsed.ContextLength = valInt
+				}
+				i++
+			}
+		case "--served-model-name": // vllm specific
+			if i+1 < len(args) {
+				parsed.CmdAlias = args[i+1]
+				i++
+			}
+		case "--trust-remote-code": // vllm/hf specific
+			foundTools := false
+			for _, cap := range parsed.Capabilities {
+				if cap == "tools" {
+					foundTools = true
+					break
+				}
+			}
+			if !foundTools {
+				parsed.Capabilities = append(parsed.Capabilities, "tools")
 			}
 		case "--jinja":
 			foundTools := false
@@ -231,4 +266,39 @@ func (p *LlamaServerParser) Parse(cmdStr string, modelID string) ServerArgs {
 	}
 
 	return parsed
+}
+
+// HFConfig represents relevant parts of config.json
+type HFConfig struct {
+	Architecture          []string       `json:"architectures"`
+	ModelType             string         `json:"model_type"`
+	MaxPositionEmbeddings int            `json:"max_position_embeddings"`
+	ContextLength         int            `json:"context_length"`          // Some models use this
+	MaxSeqLen             int            `json:"max_sequence_length"`     // Some models use this
+	ModelMaxLen           int            `json:"model_max_length"`        // Some models use this
+	NumHiddenLayers       int            `json:"num_hidden_layers"`       // for param inference
+	HiddenSize            int            `json:"hidden_size"`             // for param inference
+	IntermediateSize      int            `json:"intermediate_size"`       // for param inference
+	NumAttentionHeads     int            `json:"num_attention_heads"`     // for param inference
+	NumKeyValueHeads      int            `json:"num_key_value_heads"`     // for param inference
+	VocabSize             int            `json:"vocab_size"`              // for param inference
+	Quantization          map[string]any `json:"quantization_config"`     // to detect AWQ/GPTQ/bitsandbytes
+	TorchDataType         string         `json:"torch_dtype"`             // for precision
+	TransformerVersion    string         `json:"transformers_version"`    // to check if it is HF
+}
+
+// ParseHFConfig reads and parses config.json from a directory
+func ParseHFConfig(dirPath string) (HFConfig, error) {
+	configPath := filepath.Join(dirPath, "config.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return HFConfig{}, err
+	}
+
+	var hf HFConfig
+	if err := json.Unmarshal(data, &hf); err != nil {
+		return HFConfig{}, err
+	}
+
+	return hf, nil
 }
